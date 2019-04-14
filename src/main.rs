@@ -1,4 +1,14 @@
+use std::env;
 use std::io::{self, Write};
+use std::fs::File;
+use std::io::BufReader;
+use std::io::BufRead;
+#[macro_use]
+extern crate serde_derive;
+extern crate bincode;
+
+use bincode::{serialize, deserialize};
+
 
 #[macro_use]
 macro_rules! scan {
@@ -24,6 +34,7 @@ struct Statement {
     row_to_insert: Option<Row>,
 }
 
+#[derive(Serialize, Deserialize)]
 struct Row {
     id: u32,
     username: String,
@@ -31,18 +42,32 @@ struct Row {
 }
 
 struct Table {
-    pages: Vec<Page>,
+    pager: Pager,
     num_rows: u32,
 }
 
 type Page = Vec<Row>;
 
+struct Slot {
+    page: usize,
+    page_index: usize,
+}
+
+struct Pager {
+    file: File,
+    pages: Vec<Page>
+}
+
 fn main() {
-    let mut table : Table = Table{
-        pages: Vec::with_capacity(TABLE_MAX_PAGES as usize),
-        num_rows: 0,
-    };
-    table.pages.insert(0, Page::with_capacity(1));
+    let args: Vec<String> = env::args().collect();
+    if args.len() < 2 {
+        println!("Must supply a filename as argument");
+        std::process::exit(1);
+    }
+
+    let filename = &args[1];
+
+    let mut table : Table = db_open(filename.to_string()).unwrap();
 
     loop {
         print_prompt();
@@ -132,22 +157,10 @@ fn execute_statement(statement : Statement, table : &mut Table) -> Result<(), St
     }
 }
 
-struct Slot {
-    page: usize,
-    page_index: usize,
-}
-
 fn row_slot(table: &mut Table, row_num: u32) -> Slot {
     let page_num = row_num / ROWS_PER_PAGE;
 
-    let page = match table.pages.get(page_num as usize) {
-        Some(page) => &page,
-        None => {
-            table.pages.insert(page_num as usize, Page::with_capacity(ROWS_PER_PAGE as usize));
-            &table.pages[page_num as usize]
-        },
-    };
-
+    ensure_page(&mut table.pager, page_num);
     let page_index = row_num % ROWS_PER_PAGE;
     return Slot{
         page_index: page_index as usize,
@@ -162,7 +175,7 @@ fn execute_insert(statement: Statement, table: &mut Table) -> Result<(), String>
 
     if let Some(row_to_insert) = statement.row_to_insert {
         let slot = row_slot(table, table.num_rows);
-        table.pages[slot.page].insert(slot.page_index, row_to_insert);
+        table.pager.pages[slot.page].insert(slot.page_index, row_to_insert);
     } else {
         panic!("execute_insert without row to insert")
     }
@@ -171,11 +184,60 @@ fn execute_insert(statement: Statement, table: &mut Table) -> Result<(), String>
 }
 
 fn execute_select(statement: Statement, table: &mut Table) -> Result<(), String> {
-    for page in &table.pages {
+    for page in &table.pager.pages {
         for row in page {
             println!("({}, {}, {})", row.id, row.username, row.email)
         }
     }
 
     return Ok(())
+}
+
+fn db_open(filename: String) -> Result<Table, String> {
+    match pager_open(filename) {
+        Ok(pager) => {
+            let num_rows = pager.file.metadata().unwrap().len() as u32 / ROW_SIZE;
+            return Ok(Table{
+                pager: pager,
+                num_rows: num_rows,
+            })
+        }
+        Err(err) => return Err(err),
+    }
+}
+
+fn pager_open(filename: String) -> Result<Pager, String> {
+    match File::open(filename) {
+        Ok(file) => {
+            return Ok(Pager{
+                file: file,
+                pages: Vec::with_capacity(TABLE_MAX_PAGES as usize),
+            })
+        },
+        Err(err) => {
+            return Err(format!("{}", err))
+        }
+    }
+}
+
+fn ensure_page(pager: &mut Pager, page_num: u32) {
+    if page_num > TABLE_MAX_PAGES {
+        println!("Tried to fetch page number out of bounds. {} > {}", page_num, TABLE_MAX_PAGES);
+        std::process::exit(1);
+    }
+
+    if pager.pages.get(page_num as usize).is_none() {
+        // Cache miss, load from file
+        let file = BufReader::new(&pager.file);
+
+        let mut rows = Page::with_capacity(ROWS_PER_PAGE as usize);
+        for (num, line) in file.lines().enumerate() {
+            let l = line.unwrap();
+            let chars : String = l.chars().collect();
+            let buf = chars.as_bytes();
+            let row : Row = deserialize(&buf).unwrap();
+            rows.insert(num as usize, row);
+        };
+        pager.pages.insert(page_num as usize, rows);
+    }
 }

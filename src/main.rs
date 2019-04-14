@@ -34,7 +34,7 @@ struct Statement {
     row_to_insert: Option<Row>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 struct Row {
     id: u32,
     username: String,
@@ -56,6 +56,12 @@ struct Slot {
 struct Pager {
     file: File,
     pages: Vec<Page>
+}
+
+struct Cursor<'a> {
+    table: &'a mut Table,
+    row_num: u32,
+    end_of_table: bool,
 }
 
 fn main() {
@@ -125,7 +131,6 @@ fn prepare_statement(line: &str) -> Result<Statement, String> {
         "insert" => {
             let output = scan!(line, char::is_whitespace, String, u32, String, String);
 
-            println!("{:?}", output);
             let (_, id, username, email) = output;
             if id.is_none() || username.is_none() || email.is_none() {
                 return Err(String::from("syntax error"));
@@ -157,10 +162,10 @@ fn execute_statement(statement : Statement, table : &mut Table) -> Result<(), St
     }
 }
 
-fn row_slot(table: &mut Table, row_num: u32) -> Slot {
+fn cursor_value(cursor: &mut Cursor) -> Slot {
+    let row_num = cursor.row_num;
     let page_num = row_num / ROWS_PER_PAGE;
-
-    ensure_page(&mut table.pager, page_num);
+    ensure_page(&mut cursor.table.pager, page_num);
     let page_index = row_num % ROWS_PER_PAGE;
     return Slot{
         page_index: page_index as usize,
@@ -174,8 +179,10 @@ fn execute_insert(statement: Statement, table: &mut Table) -> Result<(), String>
     }
 
     if let Some(row_to_insert) = statement.row_to_insert {
-        let slot = row_slot(table, table.num_rows);
+        let mut cursor = table_end(table);
+        let slot = cursor_value(&mut cursor);
         table.pager.pages[slot.page].insert(slot.page_index, row_to_insert);
+        table.num_rows += 1;
     } else {
         panic!("execute_insert without row to insert")
     }
@@ -184,10 +191,12 @@ fn execute_insert(statement: Statement, table: &mut Table) -> Result<(), String>
 }
 
 fn execute_select(statement: Statement, table: &mut Table) -> Result<(), String> {
-    for page in &table.pager.pages {
-        for row in page {
-            println!("({}, {}, {})", row.id, row.username, row.email)
-        }
+    let mut cursor = table_start(table);
+    while !cursor.end_of_table {
+        let slot = cursor_value(&mut cursor);
+        let row = &cursor.table.pager.pages[slot.page][slot.page_index];
+        println!("({}, {}, {})", row.id, row.username, row.email);
+        cursor_advance(&mut cursor)
     }
 
     return Ok(())
@@ -239,5 +248,30 @@ fn ensure_page(pager: &mut Pager, page_num: u32) {
             rows.insert(num as usize, row);
         };
         pager.pages.insert(page_num as usize, rows);
+    }
+}
+
+fn table_start(table: &mut Table) -> Cursor {
+    let end_of_table = table.num_rows == 0;
+    return Cursor{
+        table: table,
+        row_num: 0,
+        end_of_table: end_of_table,
+    }
+}
+
+fn table_end(table: &mut Table) -> Cursor {
+    let row_num = table.num_rows;
+    return Cursor{
+        table: table,
+        row_num: row_num,
+        end_of_table: true,
+    }
+}
+
+fn cursor_advance(cursor: &mut Cursor) {
+    cursor.row_num += 1;
+    if cursor.row_num >= cursor.table.num_rows {
+        cursor.end_of_table = true
     }
 }

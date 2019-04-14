@@ -1,14 +1,15 @@
 use std::env;
 use std::io::{self, Write};
+use std::io::prelude::*;
 use std::fs::File;
 use std::io::BufReader;
-use std::io::BufRead;
+use std::io::SeekFrom;
+use std::fs::OpenOptions;
+use std::str;
 #[macro_use]
 extern crate serde_derive;
 extern crate bincode;
-
 use bincode::{serialize, deserialize};
-
 
 #[macro_use]
 macro_rules! scan {
@@ -34,7 +35,7 @@ struct Statement {
     row_to_insert: Option<Row>,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, PartialEq, Debug)]
 struct Row {
     id: u32,
     username: String,
@@ -82,7 +83,7 @@ fn main() {
 
         let trimmed_lime : &str = line.trim();
         if trimmed_lime.chars().next().unwrap() == '.' {
-            match do_meta_command(trimmed_lime) {
+            match do_meta_command(trimmed_lime, &mut table) {
                 Ok(_) => continue,
                 Err(msg) => {
                     println!("{}", msg);
@@ -102,9 +103,12 @@ fn main() {
     }
 }
 
-fn do_meta_command(line : &str) -> Result<(), String> {
+fn do_meta_command(line : &str, table: &mut Table) -> Result<(), String> {
     match line {
-        ".exit" => std::process::exit(0),
+        ".exit" => {
+            db_close(table);
+            std::process::exit(0)
+        },
         _ =>  {
             return Err(format!("Unrecognized command '{}'", line));
         },
@@ -157,7 +161,7 @@ fn execute_statement(statement : Statement, table : &mut Table) -> Result<(), St
             return  execute_insert(statement, table);
         },
         StatementType::Select => {
-            return execute_select(statement, table);
+            return execute_select(table);
         },
     }
 }
@@ -190,13 +194,13 @@ fn execute_insert(statement: Statement, table: &mut Table) -> Result<(), String>
     return Ok(())
 }
 
-fn execute_select(statement: Statement, table: &mut Table) -> Result<(), String> {
+fn execute_select(table: &mut Table) -> Result<(), String> {
     let mut cursor = table_start(table);
     while !cursor.end_of_table {
         let slot = cursor_value(&mut cursor);
         let row = &cursor.table.pager.pages[slot.page][slot.page_index];
         println!("({}, {}, {})", row.id, row.username, row.email);
-        cursor_advance(&mut cursor)
+        cursor_advance(&mut cursor);
     }
 
     return Ok(())
@@ -205,7 +209,8 @@ fn execute_select(statement: Statement, table: &mut Table) -> Result<(), String>
 fn db_open(filename: String) -> Result<Table, String> {
     match pager_open(filename) {
         Ok(pager) => {
-            let num_rows = pager.file.metadata().unwrap().len() as u32 / ROW_SIZE;
+            let file_length = pager.file.metadata().unwrap().len();
+            let num_rows = file_length as u32 / ROW_SIZE;
             return Ok(Table{
                 pager: pager,
                 num_rows: num_rows,
@@ -215,9 +220,30 @@ fn db_open(filename: String) -> Result<Table, String> {
     }
 }
 
+fn db_close(table: &mut Table) {
+    let pages = &table.pager.pages;
+    for (num, page) in pages.iter().enumerate() {
+        pager_flush(&mut table.pager.file, num, &page)
+    }
+}
+
+fn pager_flush(file: &mut File, page_num : usize, page : &Page){
+    file.seek(SeekFrom::Start((page_num*PAGE_SIZE as usize) as u64)).unwrap();
+    let mut buf = bincode::serialize(&page).unwrap();
+    buf.resize(page.len() * ROW_SIZE as usize, 0);
+    file.write(&buf).unwrap();
+}
+
 fn pager_open(filename: String) -> Result<Pager, String> {
-    match File::open(filename) {
-        Ok(file) => {
+    let file_options = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .open(filename);
+
+    match file_options {
+        Ok(mut file) => {
+            file.seek(SeekFrom::End(0)).unwrap();
             return Ok(Pager{
                 file: file,
                 pages: Vec::with_capacity(TABLE_MAX_PAGES as usize),
@@ -237,17 +263,14 @@ fn ensure_page(pager: &mut Pager, page_num: u32) {
 
     if pager.pages.get(page_num as usize).is_none() {
         // Cache miss, load from file
-        let file = BufReader::new(&pager.file);
+        let mut file = BufReader::new(&pager.file);
 
-        let mut rows = Page::with_capacity(ROWS_PER_PAGE as usize);
-        for (num, line) in file.lines().enumerate() {
-            let l = line.unwrap();
-            let chars : String = l.chars().collect();
-            let buf = chars.as_bytes();
-            let row : Row = deserialize(&buf).unwrap();
-            rows.insert(num as usize, row);
-        };
-        pager.pages.insert(page_num as usize, rows);
+        file.seek(SeekFrom::Start((page_num*PAGE_SIZE as u32) as u64)).unwrap();
+
+        let mut buf = [0; PAGE_SIZE as usize];
+        file.read(&mut buf).unwrap();
+        let page : Page = deserialize(&buf).unwrap();
+        pager.pages.insert(page_num as usize, page);
     }
 }
 

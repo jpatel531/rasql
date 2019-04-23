@@ -8,6 +8,7 @@ pub struct Cursor<'a> {
     pub end_of_table: bool,
 }
 
+#[derive(Debug)]
 pub struct Slot {
     pub page: usize,
     pub page_index: usize,

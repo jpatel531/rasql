@@ -47,22 +47,30 @@ impl Pager {
             // Cache miss, load from file
             let mut file = BufReader::new(&self.file);
 
-            file.seek(SeekFrom::Start((page_num*PAGE_SIZE as u32) as u64)).unwrap();
+            let file_length = self.file.metadata().unwrap().len();
 
-            let mut buf = [0; PAGE_SIZE as usize];
-            file.read(&mut buf).unwrap();
-            let page : Page = bincode::deserialize(&buf).unwrap();
+            let mut num_pages = file_length / PAGE_SIZE as u64;
+            if file_length % PAGE_SIZE as u64 > 0 {
+                num_pages += 1;
+            }
+
+            let mut page = Page::new();
+            if page_num as u64 <= num_pages {
+                file.seek(SeekFrom::Start((page_num*PAGE_SIZE as u32) as u64)).unwrap();
+                let mut buf = [0; PAGE_SIZE as usize];
+                file.read(&mut buf).unwrap();
+                page = bincode::deserialize(&buf).unwrap();
+            }
+
             self.pages.insert(page_num as usize, page);
         }
     }
 
-    pub fn flush(&mut self) {
-        let pages = &self.pages;
-        for (num, page) in pages.iter().enumerate() {
-            self.file.seek(SeekFrom::Start((num*PAGE_SIZE as usize) as u64)).unwrap();
-            let mut buf = bincode::serialize(&page).unwrap();
-            buf.resize(page.len() * ROW_SIZE as usize, 0);
-            self.file.write(&buf).unwrap();
-        }
+    pub fn flush(&mut self, page_num: usize, page_size: usize) {
+        let page = &self.pages[page_num];
+        self.file.seek(SeekFrom::Start((page_num*(PAGE_SIZE as usize)) as u64)).unwrap();
+        let mut buf = bincode::serialize(&page).unwrap();
+        buf.resize(page_size as usize, 0);
+        self.file.write(&buf).unwrap();
     }
 }

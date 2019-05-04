@@ -54,7 +54,7 @@ fn main() {
                 println!("{}", msg)
             },
             Ok(stmt) => {
-                stmt.execute(&mut table);
+                stmt.execute(&mut table).expect("statement error");
             },
         }
     }
@@ -65,6 +65,14 @@ fn do_meta_command(line : &str, table: &mut Table) -> Result<(), String> {
         ".exit" => {
             table.close();
             std::process::exit(0)
+        },
+        ".btree" => {
+            let node = table.pager.get_page(0);
+            println!("leaf (size {})", node.num_cells);
+            for (i, key) in node.keys.iter().enumerate() {
+                println!("  - {} : {}", i, key);
+            }
+            return Ok(())
         },
         _ =>  {
             return Err(format!("Unrecognized command '{}'", line));
@@ -80,7 +88,6 @@ fn print_prompt() {
 fn db_open(filename: String) -> Result<Table, String> {
     match Pager::open(filename) {
         Ok(pager) => {
-            let file_length = pager.file.metadata().unwrap().len();
             return Ok(Table{
                 pager: pager,
                 root_page_num: 0,

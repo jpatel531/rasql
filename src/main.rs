@@ -7,12 +7,14 @@ extern crate serde_derive;
 extern crate bincode;
 
 mod cursor;
+mod btree;
 mod row;
 mod table;
 mod statement;
 mod pager;
 mod constants;
 
+use btree::*;
 use cursor::*;
 use row::*;
 use table::*;
@@ -79,10 +81,9 @@ fn db_open(filename: String) -> Result<Table, String> {
     match Pager::open(filename) {
         Ok(pager) => {
             let file_length = pager.file.metadata().unwrap().len();
-            let num_rows = file_length as u32 / ROW_SIZE;
             return Ok(Table{
                 pager: pager,
-                num_rows: num_rows,
+                root_page_num: 0,
             })
         }
         Err(err) => return Err(err),

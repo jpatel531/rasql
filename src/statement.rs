@@ -68,15 +68,11 @@ impl Statement {
     }
 
     fn execute_insert(self, table: &mut Table) -> Result<(), String> {
-        if table.num_rows >= TABLE_MAX_ROWS {
-            return Err(String::from("table full"));
-        }
-
         if let Some(row_to_insert) = self.row_to_insert {
+            // TODO implement max cells
+
             let mut cursor = table.end();
-            let slot = cursor.value();
-            table.pager.pages[slot.page].insert(slot.page_index, row_to_insert);
-            table.num_rows += 1;
+            cursor.insert_leaf_node(row_to_insert.id, row_to_insert);
         } else {
             panic!("execute_insert without row to insert")
         }

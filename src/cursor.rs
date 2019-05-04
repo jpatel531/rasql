@@ -4,7 +4,8 @@ use super::constants::*;
 
 pub struct Cursor<'a> {
     pub table: &'a mut Table,
-    pub row_num: u32,
+    pub page_num: u32,
+    pub cell_num: u32,
     pub end_of_table: bool,
 }
 
@@ -18,30 +19,30 @@ impl<'a> Cursor<'a> {
     pub fn iterate<F>(&'a mut self, f: F) where
     F: Fn(&Row) {
         while !self.end_of_table {
-            let slot = self.value();
-            let pager = &self.table.pager;
-            let pages = &pager.pages;
-            let row = &pages[slot.page][slot.page_index];
-            f(row);
+            let row = self.value();
+            f(&row);
             self.advance();
         }
     }
 
-    pub fn value(&mut self) -> Slot {
-        let row_num = self.row_num;
-        let page_num = row_num / ROWS_PER_PAGE;
-        self.table.pager.ensure_page(page_num);
-        let page_index = row_num % ROWS_PER_PAGE;
-        return Slot{
-            page_index: page_index as usize,
-            page: page_num as usize,
-        }
+    pub fn value(&mut self) -> &Row {
+        let node = self.table.pager.get_page(self.page_num);
+        return node.value(self.cell_num).unwrap()
     }
 
     pub fn advance(&mut self) {
-        self.row_num += 1;
-        if self.row_num >= self.table.num_rows {
+        let node = self.table.pager.get_page(self.page_num);
+        self.cell_num += 1;
+        if self.cell_num >= node.num_cells as u32 {
             self.end_of_table = true
         }
+    }
+
+    pub fn insert_leaf_node(&mut self, key: u32, value: Row) {
+        // TODO: limit maximum
+        let mut node = self.table.pager.get_page(self.page_num);
+        node.keys.insert(self.cell_num as usize, key);
+        node.values.insert(self.cell_num as usize, value);
+        node.num_cells += 1;
     }
 }

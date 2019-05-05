@@ -85,7 +85,7 @@ fn print_prompt() {
     io::stdout().flush().unwrap()
 }
 
-fn db_open(filename: String) -> Result<Table, String> {
+fn db_open<'a>(filename: String) -> Result<Table, String> {
     match Pager::open(filename) {
         Ok(pager) => {
             return Ok(Table{

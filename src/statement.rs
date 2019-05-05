@@ -1,6 +1,8 @@
 use super::row::*;
 use super::constants::*;
+use super::cursor::*;
 use super::table::Table;
+use super::btree::*;
 
 #[macro_use]
 macro_rules! scan {
@@ -71,8 +73,20 @@ impl Statement {
         if let Some(row_to_insert) = self.row_to_insert {
             // TODO implement max cells
 
-            let mut cursor = table.end();
+            let key_to_insert = row_to_insert.id;
+            let page_num = table.root_page_num;
+            let mut cursor = table.find(page_num, key_to_insert);
+
+            if cursor.cell_num < cursor.page.num_cells as u32 {
+                if let Some(key_at_index) = cursor.page.key(cursor.cell_num) {
+                    if key_at_index == key_to_insert {
+                        return Err(String::from("duplicate key"));
+                    }
+                }
+            }
+
             cursor.insert_leaf_node(row_to_insert.id, row_to_insert);
+
         } else {
             panic!("execute_insert without row to insert")
         }
